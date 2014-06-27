@@ -45,9 +45,11 @@ import dpkt, socket, sys, threading, zlib
 
 try:
     from netfilterqueue import NetfilterQueue
+    print "I: Using NetfilterQueue (from netfilterqueue)"
     HAS_NFQUEUE = True
 except:
     import nfqueue
+    print "I: Using nfqueue"
     HAS_NFQUEUE = False
 
 #-----------------------------------------------------------------
@@ -175,10 +177,14 @@ def queue_make(callback, is_ipv6):
     """
     \brief Create a queue binded to an appropriate socket.
     \param callback This function is called whenever this
-        socket receives a packet/
+        socket receives a packet.
+        Note: The prototype of this callback may depend on
+        the version of nfqueue.
+            nfqueue <  0.4.6: callback(packet)
+            nfqueue >= 0.4.6: callback(size, packet)
     \param is_ipv6 Pass True iif this is an IPv6 queue, False
-        iif this is an IPv4 queue
-    \return The corresponding queue
+        iif this is an IPv4 queue.
+    \return The corresponding queue.
     """
     queue_num = QUEUE_NUM_IPV6 if is_ipv6 else QUEUE_NUM_IPV4
     if HAS_NFQUEUE:
@@ -465,9 +471,10 @@ def make_reply(probe_packet):
 
     return str(icmp_reply)
 
-def cb4(probe_packet_bin):
+def cb4(size, probe_packet_bin):
     """
     \brief This callback is call whenever a IPv4 packet is captured by fakeroute
+    \param size (required by nfqueue >= 0.4.6)
     \param probe_packet_bin The captured packet
     Note: this function uses the following global variables:
         sock4  : The IPv4 socket managed by fakeroute
@@ -481,9 +488,10 @@ def cb4(probe_packet_bin):
     nfq_drop(probe_packet_bin)
     return 0
 
-def cb6(probe_packet_bin):
+def cb6(size, probe_packet_bin):
     """
     \brief This callback is call whenever a IPv6 packet is captured by fakeroute
+    \param size (required by nfqueue >= 0.4.6)
     \param probe_packet_bin The captured packet
     Note: this function uses the following global variables:
         sock6  : The IPv4 socket managed by fakeroute
