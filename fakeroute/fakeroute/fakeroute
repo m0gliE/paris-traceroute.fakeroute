@@ -41,7 +41,7 @@ from dpkt.ip6   import IP6
 from dpkt.icmp6 import ICMP6
 from common     import get_cfg_path, get_handled_files, str_ip_get_version
 
-import dpkt, socket, sys, threading, zlib
+import dpkt, socket, sys, threading, random
 
 try:
     from netfilterqueue import NetfilterQueue
@@ -385,6 +385,16 @@ def make_icmp_reply(src_ip, dst_ip, ttl, icmp_data, icmp_type, icmp_code):
 # Functions called when a packet is captured
 #-----------------------------------------------------------------
 
+def get_concat_from_ip(ip):
+    if ip == "start":
+        return '0'
+
+    nums = ip.split(".")
+    ret = ''
+    for num in nums:
+        ret += num
+    return ret
+
 def make_reply(probe_packet):
     """
     \brief Craft an IPv4/ICMP or IPv6/ICMPv6 reply according to
@@ -400,20 +410,26 @@ def make_reply(probe_packet):
     if ip_version not in [socket.AF_INET, socket.AF_INET6]:
         raise ValueError(ERR_INVALID_PARAMETER % packet)
 
-    flow_id = packet_get_flow_id(probe_packet)
+    flow_id = packet_get_flow_id(probe_packet).strip()
     dst = ip_to_str(packet_get_dst_ip(probe_packet))
 
     icmp_data = None
     fake_ip = "start"
     succ = hopmap[dst]
     while ttl > 0:
+        # Seed random number generator
+        ip_concat = get_concat_from_ip(fake_ip)
+        flow_concat = ''.join([str(ord(x)) for x in flow_id])
+        seed = int(ip_concat + flow_concat)
+        random.seed(seed)
+
         fake_ip = succ[fake_ip]
 
         if len(fake_ip) == 1:
             fake_ip = fake_ip[0]
         else:
             # Several nodes for this TTL, emulate a per-flow load balancer
-            fake_ip = fake_ip[zlib.crc32(fake_ip[0] + flow_id) % len(fake_ip)]
+            fake_ip = fake_ip[random.randint(0, len(fake_ip) - 1)]
             
         if fake_ip == "end":
             fake_ip = dst
