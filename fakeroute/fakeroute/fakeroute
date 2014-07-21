@@ -41,7 +41,7 @@ from dpkt.ip6   import IP6
 from dpkt.icmp6 import ICMP6
 from common     import get_cfg_path, get_handled_files, str_ip_get_version
 
-import dpkt, socket, sys, threading, random
+import dpkt, socket, sys, threading, random, zlib, signal
 
 try:
     from netfilterqueue import NetfilterQueue
@@ -102,8 +102,14 @@ sock4 = socket.socket(socket.AF_INET,  socket.SOCK_RAW, socket.IPPROTO_RAW)
 # Socket use to send IPv6 replies
 sock6 = socket.socket(socket.AF_INET6, socket.SOCK_RAW, socket.IPPROTO_RAW)
 
-# Emulated network topology
+# Emulated network topology, flow_id tables
 hopmap = dict()
+
+# Option for router emulation, default (Round Robin?)
+option = "rr"
+
+# Random number generator for program
+mda_random = random.Random()
 
 #-----------------------------------------------------------------
 # Load fakeroute file
@@ -136,7 +142,7 @@ def parse_file(dst_ip, filename, hopmap):
             succ[k].append(v)
     print "   [ %32s ] %s" % (dst_ip, desc if desc else "(No description)")
     f.close()
-    hopmap[dst_ip] = succ
+    hopmap[dst_ip] = (succ, dict())
 
 def update_hopmap(handled, hopmap):
     """
@@ -415,21 +421,29 @@ def make_reply(probe_packet):
 
     icmp_data = None
     fake_ip = "start"
-    succ = hopmap[dst]
+    succ,flow_tables = hopmap[dst]
     while ttl > 0:
-        # Seed random number generator
-        ip_concat = get_concat_from_ip(fake_ip)
-        flow_concat = ''.join([str(ord(x)) for x in flow_id])
-        seed = int(ip_concat + flow_concat)
-        random.seed(seed)
-
-        fake_ip = succ[fake_ip]
+        # Messy handling of flow_id tables & options.
+        # TODO Clean up and put in separate method
+        if not flow_tables.has_key(fake_ip):
+            flow_tables[fake_ip] = dict()
+        flow_table = flow_tables[fake_ip]
+        if not flow_table.has_key(flow_id):
+            if option == "random":
+                flow_table[flow_id] = mda_random.randint(0, len(succ[fake_ip]) - 1)
+            fake_ip = succ[fake_ip]
+            if option == "rr":
+                flow_table[flow_id] = zlib.crc32(fake_ip[0] + flow_id) % len(fake_ip)                
+        else:
+            fake_ip = succ[fake_ip]
+        index = flow_table[flow_id]
+        print index
 
         if len(fake_ip) == 1:
             fake_ip = fake_ip[0]
         else:
             # Several nodes for this TTL, emulate a per-flow load balancer
-            fake_ip = fake_ip[random.randint(0, len(fake_ip) - 1)]
+            fake_ip = fake_ip[index]
             
         if fake_ip == "end":
             fake_ip = dst
@@ -704,7 +718,7 @@ if __name__ == "__main__":
         has_ipv6 = False 
         if len(sys.argv) == 1:
             print INF_RUNNING_DEFAULT % (sys.argv[0], sys.argv[0])
-        elif len(sys.argv) == 2:
+        elif len(sys.argv) <= 3:
             if sys.argv[1] == "-6":
                 has_ipv6 = True 
             elif sys.argv[1] == "-4":
@@ -712,4 +726,10 @@ if __name__ == "__main__":
             else:
                 sys.stderr.write("usage: %r [{-4|-6}]" % argv[0])
                 sys.exit(-1) 
+        if len(sys.argv) == 3:
+            if sys.argv[2] == "random":
+                option = "random"
+            else:
+                sys.stderr.write("usage: %r [{-4|-6}] [{rr|random}]" % argv[0])
+                sys.exit(-1)
         main(has_ipv6)
