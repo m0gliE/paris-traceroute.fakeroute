@@ -25,23 +25,43 @@
 # this program; see the file COPYING.  If not, write to the Free Software
 # Foundation, 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
 #
-#
+
+#------------------------------------------------------------------------
 # TODO:
 #  - fix WITH_THREADS code
 #  - improve Load Balancer support (configuration, per-packet and
 #    per-destination load balancers)
 #  - add the possibility to fuzz ICMP replies
 #  - alternative dependency on Scapy ?
+#------------------------------------------------------------------------
+
+#------------------------------------------------------------------------
+# Options
+#------------------------------------------------------------------------
+
+# WITH_THREADS is not yet supported.
+# Fakeroute should be able to run simultaneously IPv4 and IPv6
+# probe handling (WITH_THREADS == True) but it does not work fine.
+# For the moment, a fakeroute call only manage either IPv4 handling
+# (-4) or either IPv6 handling (-6) and so WITH_THREADS is set to False
+# If working fine, we could get rid off -4 and -6 options
 
 WITH_THREADS = False
+
+# USE_SEED means that we run the program with --seed
+
+USE_SEED     = False
+
+#------------------------------------------------------------------------
+
+import dpkt, random, socket, sys, threading, zlib
 
 from dpkt.ip    import IP
 from dpkt.icmp  import ICMP
 from dpkt.ip6   import IP6
 from dpkt.icmp6 import ICMP6
-from common     import get_cfg_path, get_handled_files, str_ip_get_version
 
-import dpkt, socket, sys, threading, random, zlib
+from common     import get_cfg_path, get_handled_files, str_ip_get_version
 
 try:
     from netfilterqueue import NetfilterQueue
@@ -70,7 +90,11 @@ TARGET_IPV6 = ("::1", 0)
 
 ERR_INVALID_PARAMETER = "E: Invalid parameter (%r)"
 ERR_INVALID_IP        = "E: Invalid IP (%r) (size = %r)"
-ERR_USAGE             = "usage: %r [{-4|-6}] [--seed SEED]" % sys.argv[0]
+ERR_USAGE             = """
+usage: %r [{-4|-6}] [--seed SEED]
+
+    SEED: an integer value or "linux_time"
+""" % sys.argv[0]
 
 WNG_NETFILTER = """
 W: python-netfilter module not found.
@@ -105,9 +129,6 @@ sock6 = socket.socket(socket.AF_INET6, socket.SOCK_RAW, socket.IPPROTO_RAW)
 
 # Emulated network topology, flow_id tables
 hopmap = dict()
-
-# Random number generator for program. Default linux time.
-lb_random = random.Random()
 
 #-----------------------------------------------------------------
 # Load fakeroute file
@@ -469,23 +490,29 @@ def make_reply(probe_packet):
     fake_ip = "start"
     succ, flow_tables = hopmap[dst]
     while ttl > 0:
-        # Messy handling of flow_id tables & options.
         # TODO Clean up and put in separate method
-        if not flow_tables.has_key(fake_ip):
-            flow_tables[fake_ip] = dict()
+        # Compute egress interface (if not yet computed) for this (ip, flow-id)
+        if USE_SEED:
+            if not flow_tables.has_key(fake_ip):
+                flow_tables[fake_ip] = dict()
 
-        flow_table = flow_tables[fake_ip]
-        if not flow_table.has_key(flow_id):
-            flow_table[flow_id] = lb_random.randint(0, len(succ[fake_ip]) - 1)
+            flow_table = flow_tables[fake_ip]
+            if not flow_table.has_key(flow_id):
+                flow_table[flow_id] = random.randint(0, len(succ[fake_ip]) - 1)
 
         fake_ip = succ[fake_ip]
 
         if len(fake_ip) == 1:
             fake_ip = fake_ip[0]
         else:
-            # Several nodes for this TTL, emulate a per-flow load balancer
-            index = flow_table[flow_id]
-            fake_ip = fake_ip[index]
+            if USE_SEED:
+                print "using seed"
+                # Several nodes for this TTL, emulate a per-flow load balancer
+                index = flow_table[flow_id]
+                fake_ip = fake_ip[index]
+            else:
+                print "using crc32"
+                fake_ip = fake_ip[zlib.crc32(fake_ip[0] + flow_id) % len(fake_ip)] 
             
         if fake_ip == "end":
             fake_ip = dst
@@ -683,7 +710,7 @@ class ThreadQueue(threading.Thread):
 # Main program
 #-----------------------------------------------------------------
 
-def main(has_ipv6):
+def main(has_ipv4, has_ipv6):
     # Configuration path
     cfg_path = get_cfg_path()
 
@@ -699,8 +726,6 @@ def main(has_ipv6):
         # Overrides has_ipv6 parameter passed to main()
         has_ipv4 = len(handled4) > 0
         has_ipv6 = len(handled6) > 0
-    else:
-        has_ipv4 = (not has_ipv6) and (len(handled4) > 0)
 
     if has_ipv4: print INF_RUNNING_IPV4
     if has_ipv6: print INF_RUNNING_IPV6
@@ -765,40 +790,55 @@ def print_help():
 
 if __name__ == "__main__":
 
-    # TODO Fakeroute should be able to run simultaneously IPv4 and IPv6
-    # probe handling (WITH_THREADS == True) but it does not work fine.
-    # For the moment, a fakeroute call only manage either IPv4 handling
-    # (-4) or either IPv6 handling (-6) and so WITH_THREADS is set to False
-
     # TODO use optparse
 
-    if WITH_THREADS:
-        has_ipv6 = False # dummy parameter
-    else:
-        # -4 and -6 support
-        has_ipv6 = False 
+    #------------------------------------------------------------------------
+    # -4 and -6 support 
+    #------------------------------------------------------------------------
 
-        if len(sys.argv) in [1, 3]: # -4 or -6 option is missing
+    has_ipv4 = False 
+    has_ipv6 = False 
+
+    if not WITH_THREADS:
+        for i in range(1, len(sys.argv)):
+            if   sys.argv[i] == "-4": has_ipv4 = True
+            elif sys.argv[i] == "-6": has_ipv6 = True
+
+        if has_ipv4 and has_ipv6:
+            print >> sys.stderr, "Contradictory options -4 and -6"
+            print_help()
+            sys.exit(-1)
+
+        if not has_ipv4 and not has_ipv6:
             print INF_RUNNING_DEFAULT % (sys.argv[0], sys.argv[0])
-        elif len(sys.argv) in [2, 4]: # -4 or -6 option should be set
-            if sys.argv[1] == "-6":
-                has_ipv6 = True 
-            elif sys.argv[1] == "-4":
-                has_ipv6 = False 
-            else: # -4 or -6 option not found
-                print_help()
-                sys.exit(-1)
-        else: # not enough or too many arguments 
-            print_help()
-            sys.exit(-1)
+            has_ipv4 = True
 
-    if len(sys.argv) in [3, 4]: # --seed SEED option should be set
-        if sys.argv[1] == "--seed":
-            lb_random.seed(sys.argv[2])
-        elif sys.argv[2] == "--seed":
-            lb_random.seed(sys.argv[3])
-        else:
-            print_help()
-            sys.exit(-1)
+    #------------------------------------------------------------------------
+    # --seed parsing
+    #------------------------------------------------------------------------
 
-    main(has_ipv6)
+    index_seed = None
+    for i in range(1, len(sys.argv)):
+        if sys.argv[i] == "--seed":
+            index_seed = i
+            break
+    USE_SEED = (index_seed != None) 
+
+    try:
+        seed = int(sys.argv[i + 1])
+        if seed < 0:
+            # This is to avoid -4 and -6 option to interact with --seed
+            raise ValueError
+        print "Using user-defined seed %s" % seed
+        random.seed(seed)
+    except Exception, e:
+        # If sys.argv[i + 1] is not an integer or does not exists,
+        # it means that the seed is not specified.
+        print "Using linux timestamp as seed"
+        pass
+
+    #------------------------------------------------------------------------
+    # Run fakeroute with the parsed parameters
+    #------------------------------------------------------------------------
+
+    main(has_ipv4, has_ipv6)
