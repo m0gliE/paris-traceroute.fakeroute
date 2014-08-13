@@ -824,18 +824,19 @@ if __name__ == "__main__":
             break
     USE_SEED = (index_seed != None) 
 
-    try:
-        seed = int(sys.argv[i + 1])
-        if seed < 0:
-            # This is to avoid -4 and -6 option to interact with --seed
-            raise ValueError
-        print "Using user-defined seed %s" % seed
-        random.seed(seed)
-    except Exception, e:
-        # If sys.argv[i + 1] is not an integer or does not exists,
-        # it means that the seed is not specified.
-        print "Using linux timestamp as seed"
-        pass
+    if USE_SEED:
+        try:
+            seed = int(sys.argv[i + 1])
+            if seed < 0:
+                # This is to avoid -4 and -6 option to interact with --seed
+                raise ValueError
+            print "Using user-defined seed %s" % seed
+            random.seed(seed)
+        except Exception, e:
+            # If sys.argv[i + 1] is not an integer or does not exists,
+            # it means that the seed is not specified.
+            print "Using linux timestamp as seed"
+            pass
 
     #------------------------------------------------------------------------
     # Run fakeroute with the parsed parameters
