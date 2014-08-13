@@ -356,6 +356,7 @@ def packet_get_flow_id(packet):
     ip_version = packet_get_version(packet)
     if ip_version == socket.AF_INET: 
         if packet.p in [dpkt.ip.IP_PROTO_UDP, dpkt.ip.IP_PROTO_TCP]:
+            # flow_id = (sip, dip, sport, dport, flow_label)
             return "%s%s%s%s%s" % (
                 packet.src,
                 packet.dst,
@@ -364,13 +365,20 @@ def packet_get_flow_id(packet):
                 packet.p
             )
         elif packet.p == dpkt.ip.IP_PROTO_ICMP:
+            # TODO: Some implementations use (sip, dip, code, type)
+            # We might add an option to specify the LB strategy.
             return "%s%s%s" % (
                 packet.src,
                 packet.dst,
                 packet.p
             )
     elif ip_version == socket.AF_INET6: 
-        return packet.v_fc_flow
+        # flow_id = (sip, dip, flow_label)
+        return "%s%s%s" % (
+            packet.src,
+            packet.dst,
+            packet.flow
+        )
     raise ValueError(ERR_INVALID_PARAMETER % packet)
 
 def make_icmp_reply(src_ip, dst_ip, ttl, icmp_data, icmp_type, icmp_code):
